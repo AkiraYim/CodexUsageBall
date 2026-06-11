@@ -1,0 +1,8 @@
+.mewcode/
+.nekocode/
+
+codex-ball-preview.png
+codex-usage-preview.png
+
+*.log
+*.tmp
