@@ -23,25 +23,25 @@ function Get-CodexUsage {
         return [pscustomobject]$result
     }
 
-    $files = @()
-    for ($daysAgo = 0; $daysAgo -lt 8 -and $files.Count -eq 0; $daysAgo++) {
+    $allFiles = @()
+    for ($daysAgo = 0; $daysAgo -lt 8; $daysAgo++) {
         $date = (Get-Date).AddDays(-$daysAgo)
         $dateFolder = Join-Path $sessionsRoot ('{0:yyyy\\MM\\dd}' -f $date)
         if (Test-Path -LiteralPath $dateFolder) {
-            $files = @(Get-ChildItem -LiteralPath $dateFolder -Filter '*.jsonl' -File |
-                Sort-Object LastWriteTimeUtc -Descending |
-                Select-Object -First 5)
+            $allFiles += @(Get-ChildItem -LiteralPath $dateFolder -Filter '*.jsonl' -File)
         }
     }
 
-    if ($files.Count -eq 0) {
-        $files = @(Get-ChildItem -LiteralPath $sessionsRoot -Recurse -Filter '*.jsonl' -File |
-            Sort-Object LastWriteTimeUtc -Descending |
-            Select-Object -First 5)
+    if ($allFiles.Count -eq 0) {
+        $allFiles = @(Get-ChildItem -LiteralPath $sessionsRoot -Recurse -Filter '*.jsonl' -File)
     }
 
+    $files = @($allFiles | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 5)
+
+    $latestTimestamp = [DateTimeOffset]::MinValue
+
     foreach ($file in $files) {
-        $lines = @(Get-Content -LiteralPath $file.FullName -Tail 120 -Encoding UTF8)
+        $lines = @(Get-Content -LiteralPath $file.FullName -Tail 250 -Encoding UTF8)
         for ($index = $lines.Count - 1; $index -ge 0; $index--) {
             $line = $lines[$index]
             if ($line -notlike '*"rate_limits"*') {
@@ -53,6 +53,18 @@ function Get-CodexUsage {
                 $limits = $entry.payload.rate_limits
                 if ($null -eq $limits.primary -and $null -eq $limits.secondary) {
                     continue
+                }
+
+                $entryTimestamp = [DateTimeOffset]::MinValue
+                if (-not [DateTimeOffset]::TryParse(
+                    [string]$entry.timestamp,
+                    [ref]$entryTimestamp
+                )) {
+                    continue
+                }
+
+                if ($entryTimestamp -le $latestTimestamp) {
+                    break
                 }
 
                 $result.available = $true
@@ -72,7 +84,8 @@ function Get-CodexUsage {
                     $result.secondaryResetsAt = [long]$limits.secondary.resets_at
                 }
 
-                return [pscustomobject]$result
+                $latestTimestamp = $entryTimestamp
+                break
             }
             catch {
                 continue
@@ -97,6 +110,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
+using System.Text;
 
 public static class FullscreenMonitor {
     [StructLayout(LayoutKind.Sequential)]
@@ -127,6 +141,9 @@ public static class FullscreenMonitor {
     [DllImport("user32.dll")]
     private static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hWnd, StringBuilder className, int maxCount);
+
     public static IntPtr GetWindowMonitor(IntPtr hWnd) {
         return MonitorFromWindow(hWnd, 2);
     }
@@ -134,6 +151,13 @@ public static class FullscreenMonitor {
     public static bool IsForegroundFullscreenOnMonitor(IntPtr targetMonitor, IntPtr ownWindow) {
         IntPtr foreground = GetForegroundWindow();
         if (foreground == IntPtr.Zero || foreground == ownWindow) {
+            return false;
+        }
+
+        StringBuilder className = new StringBuilder(256);
+        GetClassName(foreground, className, className.Capacity);
+        string foregroundClass = className.ToString();
+        if (foregroundClass == "Progman" || foregroundClass == "WorkerW") {
             return false;
         }
 
@@ -225,7 +249,7 @@ if (-not $createdNew) {
                         <RowDefinition Height="10"/>
                         <RowDefinition Height="24"/>
                     </Grid.RowDefinitions>
-                    <TextBlock Text="5 小时"
+                    <TextBlock Text="5 小时剩余"
                                Foreground="#D5D7DC"
                                FontSize="13"
                                VerticalAlignment="Center"/>
@@ -256,7 +280,7 @@ if (-not $createdNew) {
                         <RowDefinition Height="10"/>
                         <RowDefinition Height="24"/>
                     </Grid.RowDefinitions>
-                    <TextBlock Text="一周"
+                    <TextBlock Text="一周剩余"
                                Foreground="#D5D7DC"
                                FontSize="13"
                                VerticalAlignment="Center"/>
@@ -375,11 +399,11 @@ function Format-ResetTime([long]$epochSeconds) {
     return ('{0:HH:mm} 重置 · 还剩 {1}小时 {2}分' -f $reset, [math]::Floor($remaining.TotalHours), $remaining.Minutes)
 }
 
-function Get-UsageColor([double]$percent) {
-    if ($percent -ge 90) {
+function Get-UsageColor([double]$percentRemaining) {
+    if ($percentRemaining -le 10) {
         return '#EF4444'
     }
-    if ($percent -ge 70) {
+    if ($percentRemaining -le 30) {
         return '#F59E0B'
     }
     return '#7FA7FF'
@@ -405,8 +429,8 @@ function Set-UsageDisplay($usage) {
         return
     }
 
-    $primary = [math]::Round($usage.primaryUsed)
-    $secondary = [math]::Round($usage.secondaryUsed)
+    $primary = [math]::Round([math]::Max(0, [math]::Min(100, 100 - $usage.primaryUsed)))
+    $secondary = [math]::Round([math]::Max(0, [math]::Min(100, 100 - $usage.secondaryUsed)))
     $ballPercent.Text = "$primary%"
     $primaryPercent.Text = "$primary%"
     $secondaryPercent.Text = "$secondary%"
@@ -415,12 +439,18 @@ function Set-UsageDisplay($usage) {
     $primaryReset.Text = Format-ResetTime $usage.primaryResetsAt
     $secondaryReset.Text = Format-ResetTime $usage.secondaryResetsAt
     $planText.Text = if ($usage.planType) { $usage.planType.ToUpperInvariant() } else { '' }
-    $updatedText.Text = '更新于 {0:HH:mm:ss} · 每 60 秒自动刷新' -f [DateTime]::Now
+    $sourceTime = [DateTimeOffset]::MinValue
+    if ([DateTimeOffset]::TryParse([string]$usage.updatedAt, [ref]$sourceTime)) {
+        $updatedText.Text = '数据截至 {0:HH:mm:ss} · 每 60 秒扫描' -f $sourceTime.ToLocalTime()
+    }
+    else {
+        $updatedText.Text = '数据时间未知 · 每 60 秒扫描'
+    }
 
     $color = Get-UsageColor $primary
     $brush = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($color))
     $primaryBar.Background = $brush
-    $arcColor = if ($primary -lt 70) { '#7FA7FF' } else { $color }
+    $arcColor = if ($primary -gt 30) { '#7FA7FF' } else { $color }
     $usageRing.Stroke = New-Object Windows.Media.SolidColorBrush (
         [Windows.Media.ColorConverter]::ConvertFromString($arcColor)
     )
