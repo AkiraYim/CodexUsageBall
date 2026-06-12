@@ -269,13 +269,35 @@ if (-not $createdNew) {
                                FontSize="15"
                                FontWeight="SemiBold"
                                VerticalAlignment="Top"/>
-                    <TextBlock x:Name="PlanText"
-                               Text=""
-                               Foreground="#7FA7FF"
-                               FontFamily="Segoe UI"
-                               FontSize="11"
-                               HorizontalAlignment="Right"
-                               VerticalAlignment="Top"/>
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Top">
+                        <TextBlock x:Name="PlanText"
+                                   Text=""
+                                   Foreground="#7FA7FF"
+                                   FontFamily="Segoe UI"
+                                   FontSize="11"
+                                   Margin="0,4,10,0"/>
+                        <Button x:Name="PanelRefreshButton"
+                                Width="58"
+                                Height="26"
+                                Background="#2D5B9A"
+                                BorderBrush="#75A7EF"
+                                BorderThickness="1"
+                                Foreground="#FFFFFF"
+                                FontFamily="Segoe UI Symbol"
+                                FontSize="12"
+                                FontWeight="SemiBold"
+                                Cursor="Hand"
+                                ToolTip="立即刷新用量"
+                                Content="↻ 刷新">
+                            <Button.Resources>
+                                <Style TargetType="Border">
+                                    <Setter Property="CornerRadius" Value="6"/>
+                                </Style>
+                            </Button.Resources>
+                        </Button>
+                    </StackPanel>
                 </Grid>
                 <Grid Grid.Row="1">
                     <Grid.RowDefinitions>
@@ -339,27 +361,12 @@ if (-not $createdNew) {
                                FontSize="11"
                                VerticalAlignment="Bottom"/>
                 </Grid>
-                <Grid Grid.Row="3">
-                    <TextBlock x:Name="UpdatedText"
-                               Text="每 60 秒自动刷新"
-                               Foreground="#727680"
-                               FontSize="10"
-                               Margin="0,0,58,0"
-                               VerticalAlignment="Center"/>
-                    <Button x:Name="PanelRefreshButton"
-                            Width="52"
-                            Height="22"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Center"
-                            Background="#263650"
-                            BorderBrush="#45638F"
-                            BorderThickness="1"
-                            Foreground="#DCE8FF"
-                            FontFamily="Segoe UI"
-                            FontSize="10"
-                            Cursor="Hand"
-                            Content="刷新"/>
-                </Grid>
+                <TextBlock x:Name="UpdatedText"
+                           Grid.Row="3"
+                           Text="每 60 秒自动刷新"
+                           Foreground="#727680"
+                           FontSize="10"
+                           VerticalAlignment="Center"/>
             </Grid>
         </Border>
         </Popup>
