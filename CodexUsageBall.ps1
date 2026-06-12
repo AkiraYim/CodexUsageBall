@@ -5,6 +5,40 @@
 $ErrorActionPreference = 'Stop'
 
 function Get-CodexUsage {
+    function Get-TailLines([string]$path, [int]$maxBytes = 8388608) {
+        $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+        $stream = New-Object System.IO.FileStream(
+            $path,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            $share
+        )
+
+        try {
+            $start = [math]::Max(0, $stream.Length - $maxBytes)
+            $stream.Position = $start
+            $buffer = New-Object byte[] ([int]($stream.Length - $start))
+            $offset = 0
+            while ($offset -lt $buffer.Length) {
+                $read = $stream.Read($buffer, $offset, $buffer.Length - $offset)
+                if ($read -le 0) {
+                    break
+                }
+                $offset += $read
+            }
+
+            $text = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $offset)
+            $lines = @($text -split '\r?\n')
+            if ($start -gt 0 -and $lines.Count -gt 0) {
+                $lines = @($lines | Select-Object -Skip 1)
+            }
+            return $lines
+        }
+        finally {
+            $stream.Dispose()
+        }
+    }
+
     $sessionsRoot = Join-Path $env:USERPROFILE '.codex\sessions'
     $result = [ordered]@{
         available = $false
@@ -26,7 +60,7 @@ function Get-CodexUsage {
     $allFiles = @()
     for ($daysAgo = 0; $daysAgo -lt 8; $daysAgo++) {
         $date = (Get-Date).AddDays(-$daysAgo)
-        $dateFolder = Join-Path $sessionsRoot ('{0:yyyy\\MM\\dd}' -f $date)
+        $dateFolder = Join-Path $sessionsRoot ('{0:yyyy/MM/dd}' -f $date)
         if (Test-Path -LiteralPath $dateFolder) {
             $allFiles += @(Get-ChildItem -LiteralPath $dateFolder -Filter '*.jsonl' -File)
         }
@@ -41,10 +75,10 @@ function Get-CodexUsage {
     $latestTimestamp = [DateTimeOffset]::MinValue
 
     foreach ($file in $files) {
-        $lines = @(Get-Content -LiteralPath $file.FullName -Tail 250 -Encoding UTF8)
+        $lines = @(Get-TailLines $file.FullName)
         for ($index = $lines.Count - 1; $index -ge 0; $index--) {
             $line = $lines[$index]
-            if ($line -notlike '*"rate_limits"*') {
+            if ($line -notmatch '^\{"timestamp":"[^"]+","type":"event_msg","payload":\{"type":"token_count"') {
                 continue
             }
 
@@ -305,12 +339,27 @@ if (-not $createdNew) {
                                FontSize="11"
                                VerticalAlignment="Bottom"/>
                 </Grid>
-                <TextBlock x:Name="UpdatedText"
-                           Grid.Row="3"
-                           Text="每 60 秒自动刷新"
-                           Foreground="#727680"
-                           FontSize="10"
-                           VerticalAlignment="Bottom"/>
+                <Grid Grid.Row="3">
+                    <TextBlock x:Name="UpdatedText"
+                               Text="每 60 秒自动刷新"
+                               Foreground="#727680"
+                               FontSize="10"
+                               Margin="0,0,58,0"
+                               VerticalAlignment="Center"/>
+                    <Button x:Name="PanelRefreshButton"
+                            Width="52"
+                            Height="22"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
+                            Background="#263650"
+                            BorderBrush="#45638F"
+                            BorderThickness="1"
+                            Foreground="#DCE8FF"
+                            FontFamily="Segoe UI"
+                            FontSize="10"
+                            Cursor="Hand"
+                            Content="刷新"/>
+                </Grid>
             </Grid>
         </Border>
         </Popup>
@@ -376,6 +425,7 @@ $secondaryBar = $window.FindName('SecondaryBar')
 $secondaryReset = $window.FindName('SecondaryReset')
 $updatedText = $window.FindName('UpdatedText')
 $planText = $window.FindName('PlanText')
+$panelRefreshButton = $window.FindName('PanelRefreshButton')
 
 $workArea = [Windows.SystemParameters]::WorkArea
 $window.Left = $workArea.Right - $window.Width - 20
@@ -479,7 +529,13 @@ Get-CodexUsage | ConvertTo-Json -Compress
 "@
     $null = $script:usagePowerShell.AddScript($collectorScript)
     $script:usageAsyncResult = $script:usagePowerShell.BeginInvoke()
+    $panelRefreshButton.IsEnabled = $false
 }
+
+$panelRefreshButton.Add_Click({
+    $updatedText.Text = '正在刷新...'
+    Start-UsageRefresh
+})
 
 function Complete-UsageRefresh {
     if ($null -eq $script:usageAsyncResult -or -not $script:usageAsyncResult.IsCompleted) {
@@ -500,6 +556,7 @@ function Complete-UsageRefresh {
         $script:usagePowerShell.Dispose()
         $script:usagePowerShell = $null
         $script:usageAsyncResult = $null
+        $panelRefreshButton.IsEnabled = $true
     }
 }
 
@@ -526,6 +583,8 @@ $script:dragStartLeft = 0.0
 $script:dragStartTop = 0.0
 $script:windowHandle = [IntPtr]::Zero
 $script:ballMonitor = [IntPtr]::Zero
+$script:fullscreenAutoHideEnabled = $false
+$script:fullscreenDetectionCount = 0
 $script:hiddenForFullscreen = $false
 
 function Get-CursorPositionDip {
@@ -582,12 +641,28 @@ function Update-FullscreenVisibility {
         return
     }
 
+    if (-not $script:fullscreenAutoHideEnabled) {
+        $script:fullscreenDetectionCount = 0
+        if ($script:hiddenForFullscreen) {
+            $window.Visibility = [Windows.Visibility]::Visible
+            $script:hiddenForFullscreen = $false
+        }
+        return
+    }
+
     $shouldHide = [FullscreenMonitor]::IsForegroundFullscreenOnMonitor(
         $script:ballMonitor,
         $script:windowHandle
     )
 
-    if ($shouldHide -and -not $script:hiddenForFullscreen) {
+    if ($shouldHide) {
+        $script:fullscreenDetectionCount++
+    }
+    else {
+        $script:fullscreenDetectionCount = 0
+    }
+
+    if ($script:fullscreenDetectionCount -ge 4 -and -not $script:hiddenForFullscreen) {
         Close-Panel
         $window.Visibility = [Windows.Visibility]::Hidden
         $script:hiddenForFullscreen = $true
@@ -665,6 +740,16 @@ $refreshItem = New-Object System.Windows.Controls.MenuItem
 $refreshItem.Header = '立即刷新'
 $refreshItem.Add_Click({ Start-UsageRefresh })
 $menu.Items.Add($refreshItem) | Out-Null
+
+$fullscreenItem = New-Object System.Windows.Controls.MenuItem
+$fullscreenItem.Header = '全屏时自动隐藏'
+$fullscreenItem.IsCheckable = $true
+$fullscreenItem.IsChecked = $script:fullscreenAutoHideEnabled
+$fullscreenItem.Add_Click({
+    $script:fullscreenAutoHideEnabled = $fullscreenItem.IsChecked
+    Update-FullscreenVisibility
+})
+$menu.Items.Add($fullscreenItem) | Out-Null
 
 $openFolderItem = New-Object System.Windows.Controls.MenuItem
 $openFolderItem.Header = '打开程序目录'
