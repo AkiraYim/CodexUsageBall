@@ -516,9 +516,11 @@ function Set-UsageDisplay($usage) {
 
 $script:usagePowerShell = $null
 $script:usageAsyncResult = $null
+$script:lastUsageUpdatedAt = $null
+$script:manualRefreshRequested = $false
 $usageFunctionText = ${function:Get-CodexUsage}.ToString()
 
-function Start-UsageRefresh {
+function Start-UsageRefresh([switch]$Manual) {
     if ($null -ne $script:usageAsyncResult -and -not $script:usageAsyncResult.IsCompleted) {
         return
     }
@@ -537,11 +539,13 @@ Get-CodexUsage | ConvertTo-Json -Compress
     $null = $script:usagePowerShell.AddScript($collectorScript)
     $script:usageAsyncResult = $script:usagePowerShell.BeginInvoke()
     $panelRefreshButton.IsEnabled = $false
+    $panelRefreshButton.Content = '刷新中'
+    $script:manualRefreshRequested = $Manual
 }
 
 $panelRefreshButton.Add_Click({
-    $updatedText.Text = '正在刷新...'
-    Start-UsageRefresh
+    $updatedText.Text = '正在扫描本地用量快照...'
+    Start-UsageRefresh -Manual
 })
 
 function Complete-UsageRefresh {
@@ -553,7 +557,24 @@ function Complete-UsageRefresh {
         $output = $script:usagePowerShell.EndInvoke($script:usageAsyncResult)
         $json = ($output | ForEach-Object { $_.ToString() }) -join ''
         if ($json) {
-            Set-UsageDisplay ($json | ConvertFrom-Json)
+            $usage = $json | ConvertFrom-Json
+            $previousUpdatedAt = $script:lastUsageUpdatedAt
+            Set-UsageDisplay $usage
+            $script:lastUsageUpdatedAt = [string]$usage.updatedAt
+
+            if (
+                $script:manualRefreshRequested -and
+                $previousUpdatedAt -and
+                $previousUpdatedAt -eq $script:lastUsageUpdatedAt
+            ) {
+                $sourceTime = [DateTimeOffset]::MinValue
+                if ([DateTimeOffset]::TryParse($script:lastUsageUpdatedAt, [ref]$sourceTime)) {
+                    $updatedText.Text = '已扫描，无新快照 · 数据截至 {0:HH:mm:ss}' -f $sourceTime.ToLocalTime()
+                }
+                else {
+                    $updatedText.Text = '已扫描，但 Codex 尚未写入新快照'
+                }
+            }
         }
     }
     catch {
@@ -563,7 +584,9 @@ function Complete-UsageRefresh {
         $script:usagePowerShell.Dispose()
         $script:usagePowerShell = $null
         $script:usageAsyncResult = $null
+        $script:manualRefreshRequested = $false
         $panelRefreshButton.IsEnabled = $true
+        $panelRefreshButton.Content = '↻ 刷新'
     }
 }
 
@@ -745,7 +768,7 @@ $window.Add_Deactivated({
 $menu = New-Object System.Windows.Controls.ContextMenu
 $refreshItem = New-Object System.Windows.Controls.MenuItem
 $refreshItem.Header = '立即刷新'
-$refreshItem.Add_Click({ Start-UsageRefresh })
+$refreshItem.Add_Click({ Start-UsageRefresh -Manual })
 $menu.Items.Add($refreshItem) | Out-Null
 
 $fullscreenItem = New-Object System.Windows.Controls.MenuItem

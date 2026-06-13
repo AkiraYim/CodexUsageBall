@@ -21,7 +21,10 @@ Windows 桌面悬浮球，用来查看 Codex 的 5 小时与一周用量。
 数据来自 `%USERPROFILE%\.codex\sessions` 中 Codex 自己记录的
 `token_count.rate_limits`，不会上传账号信息，也不读取 `auth.json`。
 
-如果显示 `--%`，先在 Codex 中发送一条消息，再右键选择“立即刷新”。
+刷新只会重新扫描本地快照，不会向 Codex 服务器主动查询额度。重启电脑后如果
+仍显示昨晚的数据，请先在 Codex 中完成一次消息回复，再点击“刷新”。
+
+如果显示 `--%`，同样先在 Codex 中发送一条消息，再刷新。
 
 ## 调试
 
